@@ -1,0 +1,252 @@
+<?php
+/**
+ * ZedGuard — dosya bütünlüğü + malware izleyici
+ * Paylaşımlı hosting (cPanel/Hostinger tarzı) hesapları için, cron ile
+ * periyodik çalışan, harici bağımlılık gerektirmeyen tek dosyalık script.
+ *
+ * 3 katman:
+ *  1) Kesin imza eşleşmesi (dosya adı/içerik)  -> OTOMATİK SİL + bildir
+ *  2) Genel şüpheli davranış kalıpları (sadece YENİ/DEĞİŞEN dosyalarda) -> BİLDİR, silme
+ *  3) Dosya ekleme/silme/boyut değişikliği -> BİLDİR
+ *
+ * Kurulum: README.md'ye bakın.
+ */
+
+$configFile = __DIR__ . '/config.php';
+if (!file_exists($configFile)) {
+    fwrite(STDERR, "config.php bulunamadı. config.example.php dosyasını config.php olarak kopyalayıp doldurun.\n");
+    exit(1);
+}
+$config = require $configFile;
+
+$TELEGRAM_TOKEN = $config['telegram_token'];
+$TELEGRAM_CHAT_ID = $config['telegram_chat_id'];
+$BASE = rtrim($config['sites_base_dir'], '/');
+$EXCLUDE_DIRS = $config['exclude_dirs'];
+$CLEAN_REPORT_HOURS = $config['clean_report_hours'];
+
+$BASELINE_FILE = __DIR__ . '/baseline.json';
+
+// --- Katman 1: kesin imza -> otomatik sil ---
+// Not: Bu liste, bu projenin GitHub sayfasındaki gerçek bir olaydan
+// (bkz. README "Neden bu araç ortaya çıktı") gelen imzaları içerir.
+// Kendi ortamınızda karşılaştığınız yeni imzaları buraya ekleyebilirsiniz.
+$KNOWN_MALWARE_NAMES = ['awp-niin.php', 'dragonshell.php', 'anc.php', 'kicau.php', 'alccc.php', 'iwo.txt', 'ss.php'];
+$KNOWN_MALWARE_CONTENT = ['myzedd.tech', 'secured by zedd', 'kickbacks-backend', 'trygravity.ai'];
+
+// --- Katman 2: genel şüpheli kalıplar (sadece bildirim) ---
+$SUSPICIOUS_PATTERNS = [
+    '/eval\s*\(\s*(base64_decode|gzinflate|str_rot13|gzuncompress)\s*\(/i' => 'obfuscated eval',
+    '/\b(system|shell_exec|passthru|exec)\s*\(\s*\$_(GET|POST|REQUEST)/i' => 'doğrudan komut çalıştırma',
+    '/\bassert\s*\(\s*\$_(GET|POST|REQUEST)/i' => 'assert ile kod çalıştırma',
+    '/fsockopen\s*\(/i' => 'ham soket bağlantısı',
+    '/[\x{3040}-\x{30ff}\x{4e00}-\x{9fff}]{2,}\s*=/u' => 'unicode değişken ismi (obfuscation belirtisi)',
+];
+
+// WordPress çekirdeğindeki bilinen meşru fsockopen kullanıcıları — bunları
+// "genel kalıp" alarmından muaf tutuyoruz (WP'siz kurulumlarda bu liste boş bırakılabilir).
+$LEGIT_FSOCKOPEN_FILES = [
+    'wp-admin/includes/file.php', 'wp-admin/includes/class-ftp-pure.php',
+    'wp-includes/class-snoopy.php', 'wp-includes/class-pop3.php',
+    'wp-includes/phpmailer/smtp.php', 'wp-includes/phpmailer/pop3.php',
+    'wp-includes/simplepie/library/simplepie.php', 'wp-includes/simplepie/src/file.php',
+    'wp-includes/simplepie/src/simplepie.php', 'wp-includes/ixr/class-ixr-client.php',
+];
+
+function discoverSites(string $base): array {
+    $sites = [];
+    foreach (scandir($base) ?: [] as $entry) {
+        if ($entry === '.' || $entry === '..') continue;
+        if (is_dir("$base/$entry") && is_dir("$base/$entry/public_html")) {
+            $sites[] = $entry;
+        }
+    }
+    sort($sites);
+    return $sites;
+}
+
+function sendTelegram(string $token, string $chatId, string $text): void {
+    if (empty($token) || empty($chatId)) return;
+    $url = "https://api.telegram.org/bot{$token}/sendMessage";
+    $data = ['chat_id' => $chatId, 'text' => $text, 'parse_mode' => 'HTML'];
+    $ctx = stream_context_create([
+        'http' => [
+            'method'  => 'POST',
+            'header'  => "Content-Type: application/x-www-form-urlencoded\r\n",
+            'content' => http_build_query($data),
+            'timeout' => 10,
+        ],
+    ]);
+    @file_get_contents($url, false, $ctx);
+}
+
+function scanRoot(string $root, array $excludeDirs): array {
+    $result = [];
+    if (!is_dir($root)) return $result;
+    $iterator = new RecursiveIteratorIterator(
+        new RecursiveDirectoryIterator($root, FilesystemIterator::SKIP_DOTS),
+        RecursiveIteratorIterator::SELF_FIRST
+    );
+    foreach ($iterator as $item) {
+        $relPath = substr($item->getPathname(), strlen($root) + 1);
+        $parts = explode('/', $relPath);
+        $skip = false;
+        foreach ($parts as $p) {
+            if (in_array(strtolower($p), $excludeDirs, true)) { $skip = true; break; }
+        }
+        if ($skip) continue;
+        if ($item->isFile()) {
+            $result[$relPath] = [
+                'size' => $item->getSize(),
+                'mtime' => $item->getMTime(),
+            ];
+        }
+    }
+    return $result;
+}
+
+function isCodeFile(string $path): bool {
+    return (bool)preg_match('/\.(php|phtml|php[3-8]?|js|cgi|pl|sh)$/i', $path);
+}
+
+function matchesKnownMalware(string $fullPath, string $relPath, array $names, array $contentNeedles): bool {
+    $basename = strtolower(basename($relPath));
+    if (in_array($basename, $names, true)) return true;
+    if (!isCodeFile($relPath)) return false;
+    if (!is_readable($fullPath) || filesize($fullPath) > 5 * 1024 * 1024) return false;
+    $content = @file_get_contents($fullPath);
+    if ($content === false) return false;
+    $lower = strtolower($content);
+    foreach ($contentNeedles as $needle) {
+        if (str_contains($lower, strtolower($needle))) return true;
+    }
+    return false;
+}
+
+function checkSuspiciousPatterns(string $fullPath, string $relPath, array $patterns, array $legitFsockopenFiles): array {
+    if (!isCodeFile($relPath)) return [];
+    if (!is_readable($fullPath) || filesize($fullPath) > 5 * 1024 * 1024) return [];
+    $content = @file_get_contents($fullPath);
+    if ($content === false) return [];
+    $hits = [];
+    $relLower = strtolower($relPath);
+    foreach ($patterns as $pattern => $label) {
+        if ($label === 'ham soket bağlantısı' && in_array($relLower, $legitFsockopenFiles, true)) continue;
+        if (@preg_match($pattern, $content)) {
+            $hits[] = $label;
+        }
+    }
+    return $hits;
+}
+
+// --- Ana akış ---
+$baseline = [];
+if (file_exists($BASELINE_FILE)) {
+    $baseline = json_decode(file_get_contents($BASELINE_FILE), true) ?: [];
+}
+
+$isFirstRun = empty($baseline);
+$SITES = discoverSites($BASE);
+$newBaseline = [];
+$report = [];
+$anyChange = false;
+$newSites = [];
+$removedSites = [];
+$autoDeleted = [];
+$suspiciousFlags = [];
+
+foreach ($SITES as $site) {
+    $root = "$BASE/$site/public_html";
+    $current = scanRoot($root, $EXCLUDE_DIRS);
+
+    if ($isFirstRun) {
+        $newBaseline[$site] = $current;
+        continue;
+    }
+
+    if (!isset($baseline[$site])) {
+        $newSites[] = $site;
+        $newBaseline[$site] = $current;
+        continue;
+    }
+
+    $old = $baseline[$site];
+    $added = array_diff(array_keys($current), array_keys($old));
+    $removed = array_diff(array_keys($old), array_keys($current));
+    $modified = [];
+    foreach ($current as $path => $info) {
+        if (isset($old[$path]) && $old[$path]['size'] !== $info['size']) {
+            $modified[] = $path;
+        }
+    }
+
+    $toCheck = array_merge($added, $modified);
+    foreach ($toCheck as $relPath) {
+        if (!isset($current[$relPath])) continue;
+        $fullPath = "$root/$relPath";
+        if (matchesKnownMalware($fullPath, $relPath, $KNOWN_MALWARE_NAMES, $KNOWN_MALWARE_CONTENT)) {
+            @unlink($fullPath);
+            $autoDeleted[] = "$site: $relPath";
+            unset($current[$relPath]);
+            continue;
+        }
+        $hits = checkSuspiciousPatterns($fullPath, $relPath, $SUSPICIOUS_PATTERNS, $LEGIT_FSOCKOPEN_FILES);
+        if ($hits) {
+            $suspiciousFlags[] = "$site: $relPath — " . implode(', ', $hits);
+        }
+    }
+
+    $newBaseline[$site] = $current;
+
+    $deletedForSite = array_map(
+        fn($s) => substr($s, strlen("$site: ")),
+        array_filter($autoDeleted, fn($s) => str_starts_with($s, "$site: "))
+    );
+    $addedFiltered = array_diff($added, $deletedForSite);
+    if ($addedFiltered || $removed || $modified) {
+        $anyChange = true;
+        $lines = ["⚠️ <b>$site</b> — DEĞİŞİKLİK TESPİT EDİLDİ"];
+        foreach ($addedFiltered as $p) $lines[] = "  + YENİ: $p";
+        foreach ($removed as $p) $lines[] = "  - SİLİNDİ: $p";
+        foreach ($modified as $p) $lines[] = "  ~ DEĞİŞTİ: $p";
+        $report[] = implode("\n", $lines);
+    }
+}
+
+foreach (array_keys($baseline) as $oldSite) {
+    if (!in_array($oldSite, $SITES, true)) {
+        $removedSites[] = $oldSite;
+    }
+}
+
+file_put_contents($BASELINE_FILE, json_encode($newBaseline));
+
+if ($isFirstRun) {
+    sendTelegram($TELEGRAM_TOKEN, $TELEGRAM_CHAT_ID, "🛡️ ZedGuard kuruldu. Baseline alındı (" . count($SITES) . " site). Periyodik taramalar başlıyor.");
+    exit(0);
+}
+
+if ($newSites) {
+    sendTelegram($TELEGRAM_TOKEN, $TELEGRAM_CHAT_ID, "ℹ️ Yeni site tespit edildi ve izlemeye alındı: " . implode(', ', $newSites));
+}
+if ($removedSites) {
+    sendTelegram($TELEGRAM_TOKEN, $TELEGRAM_CHAT_ID, "ℹ️ Artık bulunmayan site(ler) izlemeden düşürüldü: " . implode(', ', $removedSites));
+}
+if ($autoDeleted) {
+    sendTelegram($TELEGRAM_TOKEN, $TELEGRAM_CHAT_ID, "🗑️ <b>OTOMATİK TEMİZLENDİ (bilinen imza)</b>\n\n" . implode("\n", $autoDeleted));
+}
+if ($suspiciousFlags) {
+    $msg = "🔎 <b>ŞÜPHELİ (elle kontrol edin, silinmedi)</b>\n\n" . implode("\n", $suspiciousFlags);
+    if (strlen($msg) > 3800) $msg = substr($msg, 0, 3800) . "\n...(devamı kesildi)";
+    sendTelegram($TELEGRAM_TOKEN, $TELEGRAM_CHAT_ID, $msg);
+}
+if ($anyChange) {
+    $msg = "⚠️ <b>DOSYA DEĞİŞİKLİĞİ — " . date('Y-m-d H:i') . "</b>\n\n" . implode("\n\n", $report);
+    if (strlen($msg) > 3800) $msg = substr($msg, 0, 3800) . "\n...(devamı kesildi)";
+    sendTelegram($TELEGRAM_TOKEN, $TELEGRAM_CHAT_ID, $msg);
+} elseif (!$autoDeleted && !$suspiciousFlags) {
+    $hour = (int)date('H');
+    if (in_array($hour, $CLEAN_REPORT_HOURS, true) && (int)date('i') < 15) {
+        sendTelegram($TELEGRAM_TOKEN, $TELEGRAM_CHAT_ID, "✅ Tarama yapıldı — " . date('Y-m-d H:i') . " — tüm siteler temiz (" . count($SITES) . " site kontrol edildi)");
+    }
+}

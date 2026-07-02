@@ -1,0 +1,4 @@
+config.php
+baseline.json
+*.log
+.DS_Store
