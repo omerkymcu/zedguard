@@ -34,4 +34,15 @@ return [
     // ucretsiz, https://siberguvenlik.gov.tr/api/). Zararli olarak
     // kayitliysa bildirime ekler. API yanit vermezse sessizce atlanir.
     'usom_check_enabled' => true,
+
+    // URLhaus (abuse.ch) malware-dagitim host kontrolu. Ucretsiz ama bir
+    // Auth-Key gerekir: https://auth.abuse.ch/ adresinden kayit olun.
+    // Bos birakirsaniz bu kontrol atlanir.
+    'urlhaus_auth_key' => '',
+
+    // Spamhaus Intelligence API. Ucretsiz DQS hesabi ile kullanici adi/sifre:
+    // https://portal.spamhaus.com/auth/account-setup?ps=free_dqs_product
+    // Bos birakirsaniz bu kontrol atlanir.
+    'spamhaus_username' => '',
+    'spamhaus_password' => '',
 ];

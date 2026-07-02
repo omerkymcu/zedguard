@@ -26,6 +26,10 @@ $EXCLUDE_DIRS = $config['exclude_dirs'];
 $NOTIFY_ON_CLEAN = $config['notify_on_clean'] ?? true;
 $CLEAN_REPORT_HOURS = $config['clean_report_hours'] ?? [0, 6, 12, 18];
 $USOM_CHECK_ENABLED = $config['usom_check_enabled'] ?? true;
+$URLHAUS_AUTH_KEY = $config['urlhaus_auth_key'] ?? '';
+$SPAMHAUS_USERNAME = $config['spamhaus_username'] ?? '';
+$SPAMHAUS_PASSWORD = $config['spamhaus_password'] ?? '';
+$SPAMHAUS_TOKEN = ($SPAMHAUS_USERNAME && $SPAMHAUS_PASSWORD) ? spamhausLogin($SPAMHAUS_USERNAME, $SPAMHAUS_PASSWORD) : null;
 
 $BASELINE_FILE = __DIR__ . '/baseline.json';
 
@@ -170,6 +174,66 @@ function checkUsomThreatIntel(string $domain): ?array {
     return null;
 }
 
+// URLhaus (abuse.ch) malware-dagitim host kontrolu. Ucretsiz ama bir
+// Auth-Key gerektirir: https://auth.abuse.ch/ adresinden alinir.
+// $authKey bos ise fonksiyon hicbir sey yapmadan null doner.
+function checkUrlhaus(string $domain, string $authKey): ?array {
+    if ($authKey === '') return null;
+    $ctx = stream_context_create([
+        'http' => [
+            'method'  => 'POST',
+            'header'  => "Auth-Key: $authKey\r\nContent-Type: application/x-www-form-urlencoded\r\n",
+            'content' => http_build_query(['host' => $domain]),
+            'timeout' => 5,
+            'ignore_errors' => true,
+        ],
+    ]);
+    $resp = @file_get_contents('https://urlhaus-api.abuse.ch/v1/host/', false, $ctx);
+    if ($resp === false) return null;
+    $data = json_decode($resp, true);
+    if (!is_array($data) || ($data['query_status'] ?? '') !== 'ok') return null;
+    return $data; // url_count, urls[] iceriyor
+}
+
+// Spamhaus Intelligence API. Ucretsiz DQS hesabi ile kullanici adi/sifre
+// gerektirir: https://portal.spamhaus.com/auth/account-setup?ps=free_dqs_product
+// Bearer token 24 saatte bir dolar, bu yuzden her calismada yeniden login
+// olunur (basit ve guvenilir - ayrica token cache etmeye gerek yok).
+function spamhausLogin(string $username, string $password): ?string {
+    if ($username === '' || $password === '') return null;
+    $ctx = stream_context_create([
+        'http' => [
+            'method'  => 'POST',
+            'header'  => "Content-Type: application/json\r\n",
+            'content' => json_encode(['username' => $username, 'password' => $password, 'realm' => 'intel']),
+            'timeout' => 5,
+            'ignore_errors' => true,
+        ],
+    ]);
+    $resp = @file_get_contents('https://api.spamhaus.org/api/v1/login', false, $ctx);
+    if ($resp === false) return null;
+    $data = json_decode($resp, true);
+    return $data['token'] ?? null;
+}
+
+function checkSpamhaus(string $domain, ?string $token): ?array {
+    if (!$token) return null;
+    $ctx = stream_context_create([
+        'http' => [
+            'header'  => "Authorization: Bearer $token\r\n",
+            'timeout' => 5,
+            'ignore_errors' => true,
+        ],
+    ]);
+    $resp = @file_get_contents("https://api.spamhaus.org/api/intel/v2/byobject/domain/" . urlencode($domain) . "/listing", false, $ctx);
+    if ($resp === false) return null;
+    $data = json_decode($resp, true);
+    if (is_array($data) && ($data['is-listed'] ?? false)) {
+        return $data;
+    }
+    return null;
+}
+
 // --- Ana akış ---
 $baseline = [];
 if (file_exists($BASELINE_FILE)) {
@@ -224,13 +288,27 @@ foreach ($SITES as $site) {
         $hits = checkSuspiciousPatterns($fullPath, $relPath, $SUSPICIOUS_PATTERNS, $LEGIT_FSOCKOPEN_FILES);
         if ($hits) {
             $flagText = "$site: $relPath — " . implode(', ', $hits);
-            if ($USOM_CHECK_ENABLED) {
+            if ($USOM_CHECK_ENABLED || $URLHAUS_AUTH_KEY !== '' || $SPAMHAUS_TOKEN) {
                 $content = @file_get_contents($fullPath);
                 if ($content !== false) {
                     foreach (array_slice(extractDomains($content), 0, 5) as $domain) {
-                        $verdict = checkUsomThreatIntel($domain);
-                        if ($verdict) {
-                            $flagText .= "\n    🚨 USOM'da kayıtlı: $domain (tip: {$verdict['desc']}, kritiklik: {$verdict['criticality_level']}/10)";
+                        if ($USOM_CHECK_ENABLED) {
+                            $verdict = checkUsomThreatIntel($domain);
+                            if ($verdict) {
+                                $flagText .= "\n    🚨 USOM'da kayıtlı: $domain (tip: {$verdict['desc']}, kritiklik: {$verdict['criticality_level']}/10)";
+                            }
+                        }
+                        if ($URLHAUS_AUTH_KEY !== '') {
+                            $uh = checkUrlhaus($domain, $URLHAUS_AUTH_KEY);
+                            if ($uh && ($uh['url_count'] ?? 0) > 0) {
+                                $flagText .= "\n    🚨 URLhaus'ta kayıtlı: $domain ({$uh['url_count']} zararlı URL)";
+                            }
+                        }
+                        if ($SPAMHAUS_TOKEN) {
+                            $sh = checkSpamhaus($domain, $SPAMHAUS_TOKEN);
+                            if ($sh) {
+                                $flagText .= "\n    🚨 Spamhaus'ta kayıtlı: $domain";
+                            }
                         }
                     }
                 }
