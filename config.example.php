@@ -18,7 +18,7 @@ return [
 
     // Taramadan hariç tutulacak klasör isimleri (kullanıcı yüklemeleri,
     // önbellek vb. — bunlar sürekli değiştiği için "değişiklik" sayılmamalı).
-    'exclude_dirs' => ['uploads', 'upload', 'upload_file', 'media', 'avatars', 'backups', 'cache', 'node_modules', '.git'],
+    'exclude_dirs' => ['uploads', 'upload', 'upload_file', 'media', 'avatars', 'backups', 'cache', 'node_modules', '.git', 'wflogs'],
 
     // true: her calismada (degisiklik olmasa bile) "temiz" bildirimi at
     //       (sessizlik sizi rahatsiz ediyorsa, her tetiklemede haber almak icin)

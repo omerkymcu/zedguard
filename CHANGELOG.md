@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.6 — 2026-07-02
+
+- Fixed a noisy false-positive: ZedGuard's own installation folder is now automatically excluded from scanning (regardless of what you name it). Previously `baseline.json` — rewritten on every run by design — was flagged as "changed" on every single scan, generating a false alert each time.
+- Added `wflogs` (Wordfence's own internal config/log folder) to the default `exclude_dirs` — it self-updates routinely as part of normal Wordfence operation and was triggering unnecessary alerts.
+
 ## v0.5 — 2026-07-02 (critical fix)
 
 - **Fixed a self-deletion bug**: because ZedGuard's own source code contains the literal known-malware strings it's designed to detect (e.g. `myzedd.tech`), a copy or redeploy of `monitor.php` itself could match Layer 1's content-based auto-delete and get wiped by its own logic. Found this the hard way while testing v0.4 — the tool deleted itself twice in a row.

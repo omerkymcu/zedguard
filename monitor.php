@@ -26,7 +26,12 @@ $config = require $configFile;
 $TELEGRAM_TOKEN = $config['telegram_token'];
 $TELEGRAM_CHAT_ID = $config['telegram_chat_id'];
 $BASE = rtrim($config['sites_base_dir'], '/');
-$EXCLUDE_DIRS = $config['exclude_dirs'];
+// ZedGuard'in kendi kurulu oldugu klasoru (isim ne olursa olsun) otomatik
+// haric tut - baseline.json her calismada yeniden yazildigi icin, haric
+// tutulmazsa ZedGuard kendi kendini "her seferinde degisti" diye
+// raporlayip gereksiz bildirim uretir.
+$SELF_DIR_NAME = basename(__DIR__);
+$EXCLUDE_DIRS = array_unique(array_merge($config['exclude_dirs'], [$SELF_DIR_NAME]));
 $NOTIFY_ON_CLEAN = $config['notify_on_clean'] ?? true;
 $CLEAN_REPORT_HOURS = $config['clean_report_hours'] ?? [0, 6, 12, 18];
 $USOM_CHECK_ENABLED = $config['usom_check_enabled'] ?? true;
