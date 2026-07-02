@@ -23,7 +23,8 @@ $TELEGRAM_TOKEN = $config['telegram_token'];
 $TELEGRAM_CHAT_ID = $config['telegram_chat_id'];
 $BASE = rtrim($config['sites_base_dir'], '/');
 $EXCLUDE_DIRS = $config['exclude_dirs'];
-$CLEAN_REPORT_HOURS = $config['clean_report_hours'];
+$NOTIFY_ON_CLEAN = $config['notify_on_clean'] ?? true;
+$CLEAN_REPORT_HOURS = $config['clean_report_hours'] ?? [0, 6, 12, 18];
 
 $BASELINE_FILE = __DIR__ . '/baseline.json';
 
@@ -246,7 +247,8 @@ if ($anyChange) {
     sendTelegram($TELEGRAM_TOKEN, $TELEGRAM_CHAT_ID, $msg);
 } elseif (!$autoDeleted && !$suspiciousFlags) {
     $hour = (int)date('H');
-    if (in_array($hour, $CLEAN_REPORT_HOURS, true) && (int)date('i') < 15) {
+    $shouldNotify = $NOTIFY_ON_CLEAN || (in_array($hour, $CLEAN_REPORT_HOURS, true) && (int)date('i') < 15);
+    if ($shouldNotify) {
         sendTelegram($TELEGRAM_TOKEN, $TELEGRAM_CHAT_ID, "✅ Tarama yapıldı — " . date('Y-m-d H:i') . " — tüm siteler temiz (" . count($SITES) . " site kontrol edildi)");
     }
 }

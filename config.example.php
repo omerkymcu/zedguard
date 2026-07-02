@@ -20,6 +20,12 @@ return [
     // önbellek vb. — bunlar sürekli değiştiği için "değişiklik" sayılmamalı).
     'exclude_dirs' => ['uploads', 'upload', 'upload_file', 'media', 'avatars', 'backups', 'cache', 'node_modules', '.git'],
 
-    // Günün hangi saatlerinde (değişiklik yoksa) "temiz" özet bildirimi atılsın.
+    // true: her calismada (degisiklik olmasa bile) "temiz" bildirimi at
+    //       (sessizlik sizi rahatsiz ediyorsa, her tetiklemede haber almak icin)
+    // false: sadece asagidaki clean_report_hours saatlerinde bildirim at
+    'notify_on_clean' => true,
+
+    // notify_on_clean = false ise, gunun hangi saatlerinde (degisiklik yoksa)
+    // "temiz" ozet bildirimi atilsin.
     'clean_report_hours' => [0, 6, 12, 18],
 ];
