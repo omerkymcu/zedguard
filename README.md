@@ -2,9 +2,9 @@
 
 # 🛡️ ZedGuard
 
-**Paylaşımlı hosting için tek dosyalık, bağımlılıksız dosya bütünlüğü + malware izleyici.**
+**A single-file, zero-dependency file integrity + malware watchdog for shared hosting.**
 
-Cron ile periyodik çalışır, şüpheli değişiklikleri **Telegram**'a bildirir, bilinen zararlıları **otomatik siler**.
+Runs via cron, reports suspicious changes to **Telegram**, and **auto-deletes** known malware.
 
 ![Status](https://img.shields.io/badge/status-alpha-orange)
 ![License](https://img.shields.io/badge/license-MIT-blue)
@@ -15,152 +15,152 @@ Cron ile periyodik çalışır, şüpheli değişiklikleri **Telegram**'a bildir
 
 ---
 
-## 🐦 Neden bu araç ortaya çıktı
+## 🐦 Why this exists
 
-27 domainlik bir Hostinger hesabındaki tüm siteler, **tek bir sızmış kimlik bilgisi** üzerinden aynı saniyede saldırıya uğradı. Saldırgan (rumuzu "Zedd") her siteye aynı backdoor'u (`awp-niin.php` — uzaktan kod çeken bir dropper), sahte bir WordPress eklentisi (`wp-content/plugins/lexom/` — "Kicau Mania Plugin" adıyla SEO spam enjekte ediyordu) ve `wp-config.php`'lere "`/** Secured by Zedd **/`" imzalı bir enjeksiyon bıraktı.
+Every site on a 27-domain Hostinger account got hit at the exact same second, through a **single leaked credential**. The attacker (signed "Zedd") dropped the same backdoor (`awp-niin.php` — a dropper that fetches remote code) on every domain, planted a fake WordPress plugin (`wp-content/plugins/lexom/` — "Kicau Mania Plugin," injecting SEO spam) and left a `/** Secured by Zedd **/` signature inside every `wp-config.php`.
 
-Sorun şuydu: **bunu haftalarca fark etmedik.** Paylaşımlı hosting'te ne bir WAF, ne bir dosya bütünlük izleyicisi vardı. Sistem yeniden kurulup şifreler rotasyona sokulduktan **saatler sonra bile** aynı saldırı bir kez daha, aynı anda tüm sitelere düştü — çünkü hiçbir şey bunu **anında** haber vermiyordu.
+The real problem: **it went unnoticed for weeks.** No WAF, no file integrity monitor, nothing on shared hosting to catch it. Even after credentials were rotated and the account cleaned, the *exact same* mass-drop happened again hours later — because nothing was watching in real time.
 
-ZedGuard, bunun bir daha yaşanmaması için bir gecede yazıldı. Basit tutuldu: **tek dosya, sıfır bağımlılık, sadece PHP + cron.**
+ZedGuard was written overnight so that doesn't happen again. Kept deliberately simple: **one file, zero dependencies, just PHP + cron.**
 
-## ⚠️ Alpha uyarısı
+## ⚠️ Alpha warning
 
-Bu araç şu anda **gerçek bir saldırı sonrası, gerçek bir hesapta** kullanılıyor ve işe yarıyor — ama:
-- Tek bir ortamda (Hostinger paylaşımlı hosting) test edildi
-- Bilinen imza listesi şu anki olayın IOC'lerine dayanıyor, genel bir malware veritabanı değil
-- Kod tabanı küçük ve gözden geçirilmeye açık — PR'lar ve issue'lar memnuniyetle karşılanır
+This tool is currently **running on a real account, after a real incident** — and it works. But:
+- It's only been tested in one environment (Hostinger shared hosting)
+- The known-signature list is derived from this specific incident's IOCs, not a general malware database
+- The codebase is small and open to review — PRs and issues welcome
 
-**Bunu tam bir antivirüs/güvenlik duvarının yerine koymayın.** WordPress siteleriniz için ek olarak [Wordfence](https://wordfence.com) gibi olgun bir çözüm kullanmanızı öneririz — ZedGuard onun tamamlayıcısı, yerine geçeni değil.
+**Don't treat this as a replacement for a real antivirus/firewall.** For WordPress sites, pair it with something mature like [Wordfence](https://wordfence.com) — ZedGuard complements that, it doesn't replace it.
 
-## ✨ Ne yapıyor
+## ✨ What it does
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│  Hostinger cron (saatlik)                                │
+│  Hosting cron (hourly)                                    │
 │         │                                                 │
 │         ▼                                                 │
-│  monitor.php  ──►  /home/kullanici/domains/*/public_html  │
-│         │              (her sitenin kökü, uploads hariç)  │
+│  monitor.php  ──►  /home/user/domains/*/public_html       │
+│         │              (each site's root, uploads excl.)  │
 │         ▼                                                 │
 │  ┌───────────────────────────────────────────────────┐   │
-│  │ Katman 1: Bilinen imza eşleşmesi                   │   │
-│  │   → OTOMATİK SİL + Telegram bildirim               │   │
+│  │ Layer 1: Known-signature match                     │   │
+│  │   → AUTO-DELETE + Telegram alert                   │   │
 │  ├───────────────────────────────────────────────────┤   │
-│  │ Katman 2: Genel şüpheli davranış (eval/base64,     │   │
-│  │   shell_exec($_GET), unicode obfuscation, vb.)     │   │
-│  │   → SADECE BİLDİR, silmez                          │   │
+│  │ Layer 2: Generic suspicious behavior (eval/base64, │   │
+│  │   shell_exec($_GET), unicode obfuscation, etc.)    │   │
+│  │   → ALERT ONLY, never deletes                      │   │
 │  ├───────────────────────────────────────────────────┤   │
-│  │ Katman 3: Dosya ekleme/silme/boyut değişikliği     │   │
-│  │   → BİLDİR                                         │   │
+│  │ Layer 3: File added/removed/size-changed           │   │
+│  │   → ALERT                                          │   │
 │  └───────────────────────────────────────────────────┘   │
 │         │                                                 │
 │         ▼                                                 │
-│     📱 Telegram bildirimi                                 │
+│     📱 Telegram notification                              │
 └─────────────────────────────────────────────────────────┘
 ```
 
-- **Sıfır bağımlılık** — sadece çekirdek PHP (Composer, framework yok)
-- **Otomatik site keşfi** — yeni bir domain eklediğinizde elle güncelleme gerekmez, siz sildiğinizde de yanlış alarm vermez
-- **Web'den erişilemez** — `.htaccess` ile tamamen kapalı, sadece cron/CLI çalıştırabilir
-- **FTP'siz** — sunucunun kendi dosya sistemine doğrudan erişir, ana FTP şifresi değişse bile etkilenmez
+- **Zero dependencies** — plain PHP, no Composer, no framework
+- **Auto-discovers sites** — add a new domain and it's picked up automatically; remove one and it's silently dropped, no false alarm
+- **Not web-accessible** — locked down with `.htaccess`, only cron/CLI can run it
+- **No FTP required** — reads the server's own filesystem directly, unaffected even if the master FTP password changes
 
-## 📱 Örnek bildirimler
+## 📱 Example notifications
 
 ```
-🛡️ ZedGuard kuruldu. Baseline alındı (11 site). Periyodik taramalar başlıyor.
+🛡️ ZedGuard installed. Baseline captured (11 sites). Starting periodic scans.
 
-✅ Tarama yapıldı — 2026-07-02 18:00 — tüm siteler temiz (11 site kontrol edildi)
+✅ Scan complete — 2026-07-02 18:00 — all sites clean (11 sites checked)
 
-🗑️ OTOMATİK TEMİZLENDİ (bilinen imza)
+🗑️ AUTO-REMOVED (known signature)
 mysite.com: awp-niin.php
 
-🔎 ŞÜPHELİ (elle kontrol edin, silinmedi)
+🔎 SUSPICIOUS (manual review needed, not deleted)
 mysite.com: wp-content/themes/custom/footer-new.php — obfuscated eval
 
-⚠️ DOSYA DEĞİŞİKLİĞİ — 2026-07-02 19:00
-⚠️ mysite.com — DEĞİŞİKLİK TESPİT EDİLDİ
-  + YENİ: wp-content/uploads/2026/07/image.jpg
+⚠️ FILE CHANGE — 2026-07-02 19:00
+⚠️ mysite.com — CHANGE DETECTED
+  + NEW: wp-content/uploads/2026/07/image.jpg
 ```
 
-## 🚀 Kurulum
+## 🚀 Installation
 
-### 1. Dosyaları sunucuya yükleyin
+### 1. Upload the files
 
-Sitelerinizden **birinin** kök dizini altına, **web'den erişilemeyecek** bir klasöre koyun:
+Place these inside **one** of your sites' document root, in a folder that is **not web-accessible**:
 
 ```
-/home/kullanici/domains/example.com/public_html/_zedguard/
+/home/user/domains/example.com/public_html/_zedguard/
   ├── monitor.php
   ├── config.example.php
-  └── .htaccess   (aşağıya bakın)
+  └── .htaccess   (see below)
 ```
 
-`.htaccess` içeriği (klasörü tamamen kapatır):
+`.htaccess` contents (blocks the folder entirely):
 
 ```apache
 Order Allow,Deny
 Deny from all
 ```
 
-### 2. Yapılandırın
+### 2. Configure
 
 ```bash
 cp config.example.php config.php
 ```
 
-`config.php`'yi kendi bilgilerinizle doldurun:
+Fill in `config.php` with your own values:
 
 ```php
 return [
-    'telegram_token'   => 'BOT_TOKEN',      // @BotFather'dan
-    'telegram_chat_id' => 'CHAT_ID',        // botunuza mesaj atıp getUpdates ile öğrenin
-    'sites_base_dir'   => '/home/kullaniciadi/domains',
+    'telegram_token'   => 'BOT_TOKEN',      // from @BotFather
+    'telegram_chat_id' => 'CHAT_ID',        // message your bot, then check getUpdates
+    'sites_base_dir'   => '/home/username/domains',
     'exclude_dirs'     => ['uploads', 'media', 'backups', 'cache', 'node_modules', '.git'],
-    'clean_report_hours' => [0, 6, 12, 18], // temiz olduğunda günde kaç kez/ne zaman bildirim
+    'clean_report_hours' => [0, 6, 12, 18], // how often/when to send "all clean" heartbeats
 ];
 ```
 
-### 3. Cron job ekleyin
+### 3. Add a cron job
 
-hPanel (veya cPanel) → Cron Jobs:
+hPanel (or cPanel) → Cron Jobs:
 
 ```
-0 * * * *  php /home/kullaniciadi/domains/example.com/public_html/_zedguard/monitor.php
+0 * * * *  php /home/username/domains/example.com/public_html/_zedguard/monitor.php
 ```
 
-Saatlik önerilir; daha sık isterseniz `*/15 * * * *` gibi bir ifade kullanabilirsiniz.
+Hourly is a reasonable default; use something like `*/15 * * * *` for a tighter interval.
 
-### 4. İlk çalıştırma
+### 4. First run
 
-İlk çalıştığında sadece baseline alır ve "kuruldu" bildirimi gönderir — henüz karşılaştıracak bir şey olmadığı için alarm vermez. Cron'u tetiklemeden test etmek isterseniz, script'i geçici olarak `.htaccess` korumasız bir yere koyup tarayıcıdan/`curl` ile bir kez çalıştırıp hemen kaldırabilirsiniz.
+The first run only captures a baseline and sends an "installed" notification — there's nothing to compare against yet, so it won't alarm. To test without waiting for cron, temporarily place the script somewhere without the `.htaccess` block, hit it once via browser/`curl`, then remove it immediately.
 
-## 🔧 Kendi imzalarınızı eklemek
+## 🔧 Adding your own signatures
 
-Kendi ortamınızda farklı bir saldırı/imza ile karşılaşırsanız, `monitor.php` içindeki listelere ekleyin:
+If you run into a different attack/signature in your own environment, extend the lists in `monitor.php`:
 
 ```php
-$KNOWN_MALWARE_NAMES = ['awp-niin.php', 'dragonshell.php', /* ... kendi bulgunuz ... */];
-$KNOWN_MALWARE_CONTENT = ['myzedd.tech', /* ... kendi bulgunuz ... */];
+$KNOWN_MALWARE_NAMES = ['awp-niin.php', 'dragonshell.php', /* ...your finding... */];
+$KNOWN_MALWARE_CONTENT = ['myzedd.tech', /* ...your finding... */];
 ```
 
-## 🗺️ Yol haritası
+## 🗺️ Roadmap
 
-- [ ] Yapılandırılabilir bildirim kanalları (Discord, Slack, e-posta)
-- [ ] `.env` tabanlı yapılandırma seçeneği
-- [ ] Bilinen imza listesi için ayrı, güncellenebilir bir JSON dosyası
-- [ ] Web tabanlı basit bir durum paneli (opsiyonel, ayrı `.htaccess` korumalı)
-- [ ] Çoklu hesap desteği (birden fazla cPanel/Hostinger hesabını tek Telegram botuna bağlama)
+- [ ] Configurable notification channels (Discord, Slack, email)
+- [ ] `.env`-based configuration option
+- [ ] Known-signature list as a separate, updatable JSON file
+- [ ] Simple web-based status dashboard (optional, separately `.htaccess`-protected)
+- [ ] Multi-account support (wire multiple cPanel/Hostinger accounts to one Telegram bot)
 
-## 🤝 Katkı
+## 🤝 Contributing
 
-Issue ve PR'lar açık — özellikle yeni malware imzaları, farklı hosting ortamlarında test sonuçları ve hata düzeltmeleri için.
+Issues and PRs welcome — especially new malware signatures, test results from different hosting environments, and bug fixes.
 
-## 📄 Lisans
+## 📄 License
 
-MIT — [LICENSE](LICENSE) dosyasına bakın.
+MIT — see [LICENSE](LICENSE).
 
 ---
 
 <div align="center">
-<sub>Gerçek bir saldırıdan doğdu, gerçek bir hesapta çalışıyor. İyi şanslar. 🍀</sub>
+<sub>Born from a real attack, running on a real account. Good luck out there. 🍀</sub>
 </div>
