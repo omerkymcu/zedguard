@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.5 — 2026-07-02 (critical fix)
+
+- **Fixed a self-deletion bug**: because ZedGuard's own source code contains the literal known-malware strings it's designed to detect (e.g. `myzedd.tech`), a copy or redeploy of `monitor.php` itself could match Layer 1's content-based auto-delete and get wiped by its own logic. Found this the hard way while testing v0.4 — the tool deleted itself twice in a row.
+- Added a self-fingerprint constant (`ZEDGUARD_FINGERPRINT`) that both `matchesKnownMalware()` and `checkSuspiciousPatterns()` check for before flagging anything. Any file containing this marker (i.e. ZedGuard itself, any copy, any backup) is now unconditionally exempt from both detection layers, regardless of filename.
+- If you're running v0.1–v0.4, **upgrade immediately** — the auto-delete feature can otherwise remove your own monitor.php on the next redeploy or file-manager copy.
+
 ## v0.4 — 2026-07-02
 
 - Added URLhaus (abuse.ch) lookup — requires a free Auth-Key from auth.abuse.ch. Flags domains found in suspicious files against their malware-distribution feed.

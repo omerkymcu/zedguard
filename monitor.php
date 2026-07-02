@@ -10,6 +10,10 @@
  *  3) Dosya ekleme/silme/boyut değişikliği -> BİLDİR
  *
  * Kurulum: README.md'ye bakın.
+ *
+ * ZEDGUARD_SELF_FINGERPRINT_v1_do_not_remove
+ * (Bu satırı silmeyin — kendi kodunu tanımak ve kendini yanlışlıkla
+ * "zararlı" sayıp silmemek için kullanılıyor. Bkz. matchesKnownMalware().)
  */
 
 $configFile = __DIR__ . '/config.php';
@@ -115,6 +119,12 @@ function isCodeFile(string $path): bool {
     return (bool)preg_match('/\.(php|phtml|php[3-8]?|js|cgi|pl|sh)$/i', $path);
 }
 
+// ZedGuard'in kendi kaynak kodunu tanimlayan essiz parmak izi. Sadece bu
+// script'in kendi kopyalarinda bulunur - herhangi bir gercek malware'de
+// tesadufen gecmez. Bu sayede "kendi imza listesini icerigimde tasiyorum
+// diye kendimi zararli sanma" sorunu (dosya adindan bagimsiz) cozulur.
+const ZEDGUARD_FINGERPRINT = 'ZEDGUARD_SELF_FINGERPRINT_v1_do_not_remove';
+
 function matchesKnownMalware(string $fullPath, string $relPath, array $names, array $contentNeedles): bool {
     $basename = strtolower(basename($relPath));
     if (in_array($basename, $names, true)) return true;
@@ -122,6 +132,11 @@ function matchesKnownMalware(string $fullPath, string $relPath, array $names, ar
     if (!is_readable($fullPath) || filesize($fullPath) > 5 * 1024 * 1024) return false;
     $content = @file_get_contents($fullPath);
     if ($content === false) return false;
+    // ONEMLI: Kendi kodumuzu (veya bir kopyasini/yedegini) asla zararli
+    // sayma - kaynak kodumuz tespit ettigi imzalari string olarak
+    // barindirdigi icin (myzedd.tech vb.) bu kontrol olmadan KENDINI
+    // otomatik silebilir (yasandi, bkz. CHANGELOG v0.5).
+    if (str_contains($content, ZEDGUARD_FINGERPRINT)) return false;
     $lower = strtolower($content);
     foreach ($contentNeedles as $needle) {
         if (str_contains($lower, strtolower($needle))) return true;
@@ -134,6 +149,7 @@ function checkSuspiciousPatterns(string $fullPath, string $relPath, array $patte
     if (!is_readable($fullPath) || filesize($fullPath) > 5 * 1024 * 1024) return [];
     $content = @file_get_contents($fullPath);
     if ($content === false) return [];
+    if (str_contains($content, ZEDGUARD_FINGERPRINT)) return [];
     $hits = [];
     $relLower = strtolower($relPath);
     foreach ($patterns as $pattern => $label) {
