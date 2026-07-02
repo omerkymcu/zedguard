@@ -25,6 +25,7 @@ $BASE = rtrim($config['sites_base_dir'], '/');
 $EXCLUDE_DIRS = $config['exclude_dirs'];
 $NOTIFY_ON_CLEAN = $config['notify_on_clean'] ?? true;
 $CLEAN_REPORT_HOURS = $config['clean_report_hours'] ?? [0, 6, 12, 18];
+$USOM_CHECK_ENABLED = $config['usom_check_enabled'] ?? true;
 
 $BASELINE_FILE = __DIR__ . '/baseline.json';
 
@@ -140,6 +141,35 @@ function checkSuspiciousPatterns(string $fullPath, string $relPath, array $patte
     return $hits;
 }
 
+// Bir dosya icindeki domain benzeri stringleri cikarir (kaba ama pratik).
+function extractDomains(string $content): array {
+    if (!preg_match_all('/\b(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}\b/i', $content, $m)) {
+        return [];
+    }
+    $domains = array_unique(array_map('strtolower', $m[0]));
+    // php.net, wordpress.org gibi cok yaygin/zararsiz domainleri elemek icin
+    // basit bir filtre - gerci USOM sorgusu zaten bunlari "temiz" donduruyor,
+    // ama gereksiz API cagrisi yapmamak icin kaba bir on-eleme.
+    $commonSafe = ['w3.org', 'php.net', 'wordpress.org', 'github.com', 'schema.org', 'googleapis.com'];
+    return array_values(array_diff($domains, $commonSafe));
+}
+
+// T.C. Siber Guvenlik Baskanligi (USOM) tehdit istihbarati API'si.
+// Kimlik dogrulama gerektirmez. API degisirse/yanit vermezse sessizce atlanir
+// (bu ozellik hicbir zaman aracin geri kalanini bozmamali).
+function checkUsomThreatIntel(string $domain): ?array {
+    $url = 'https://siberguvenlik.gov.tr/api/address/index?q=' . urlencode($domain);
+    $ctx = stream_context_create(['http' => ['timeout' => 5, 'ignore_errors' => true]]);
+    $resp = @file_get_contents($url, false, $ctx);
+    if ($resp === false) return null;
+    $data = json_decode($resp, true);
+    if (!is_array($data) || !isset($data['totalCount'])) return null;
+    if ($data['totalCount'] > 0 && !empty($data['models'][0])) {
+        return $data['models'][0];
+    }
+    return null;
+}
+
 // --- Ana akış ---
 $baseline = [];
 if (file_exists($BASELINE_FILE)) {
@@ -193,7 +223,19 @@ foreach ($SITES as $site) {
         }
         $hits = checkSuspiciousPatterns($fullPath, $relPath, $SUSPICIOUS_PATTERNS, $LEGIT_FSOCKOPEN_FILES);
         if ($hits) {
-            $suspiciousFlags[] = "$site: $relPath — " . implode(', ', $hits);
+            $flagText = "$site: $relPath — " . implode(', ', $hits);
+            if ($USOM_CHECK_ENABLED) {
+                $content = @file_get_contents($fullPath);
+                if ($content !== false) {
+                    foreach (array_slice(extractDomains($content), 0, 5) as $domain) {
+                        $verdict = checkUsomThreatIntel($domain);
+                        if ($verdict) {
+                            $flagText .= "\n    🚨 USOM'da kayıtlı: $domain (tip: {$verdict['desc']}, kritiklik: {$verdict['criticality_level']}/10)";
+                        }
+                    }
+                }
+            }
+            $suspiciousFlags[] = $flagText;
         }
     }
 

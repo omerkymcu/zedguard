@@ -28,4 +28,10 @@ return [
     // notify_on_clean = false ise, gunun hangi saatlerinde (degisiklik yoksa)
     // "temiz" ozet bildirimi atilsin.
     'clean_report_hours' => [0, 6, 12, 18],
+
+    // true: supheli bulunan dosyalardaki domain'leri T.C. Siber Guvenlik
+    // Baskanligi (USOM) tehdit istihbarati API'sine sorar (auth gerekmez,
+    // ucretsiz, https://siberguvenlik.gov.tr/api/). Zararli olarak
+    // kayitliysa bildirime ekler. API yanit vermezse sessizce atlanir.
+    'usom_check_enabled' => true,
 ];
